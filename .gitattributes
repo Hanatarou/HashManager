@@ -1,0 +1,3 @@
+# The signatures and keys in the test fixtures are made over the exact bytes of the files next to them: a checkout that
+# changes line ends (Git on Windows does by default) makes every signature fail to match.
+tests/fixtures/** -text

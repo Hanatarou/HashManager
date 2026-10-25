@@ -1,0 +1,11 @@
+# Windows: link the C runtime into the program, so it runs on a computer without the
+# Visual C++ Redistributable (Hash Manager is portable: nothing to install).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# The tests are one program (tests/all); some of them change the language, which is global to the process, so they run one at a time.
+[env]
+RUST_TEST_THREADS = "1"

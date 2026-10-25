@@ -1,0 +1,161 @@
+name: Build release
+
+# The program that is released is the smallest one: profile `small` built with a nightly Rust that rebuilds the standard
+# library for size (-Z build-std). The nightly is not pinned: every build uses the newest one.
+# Clippy, the tests and the build of each system run side by side, so a run lasts as long as the slowest of them.
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Building needs to read only. Attaching files to a release (the last job) is the only thing that writes.
+permissions:
+  contents: read
+
+jobs:
+  clippy:
+    # Clippy and the tests do not run for the Intel Mac: the same code is checked and tested on the Apple silicon one.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Real-time scanning of every file the compiler writes slows the Windows jobs: the folders of the build are left out of it.
+      - name: Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup"
+
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal -c rust-src -c clippy --target ${{ matrix.target }} && rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-clippy
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+
+      - name: Clippy
+        run: cargo clippy --profile small --all-targets --target ${{ matrix.target }} -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Real-time scanning of every file the compiler writes slows the Windows jobs: the folders of the build are left out of it.
+      - name: Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup"
+
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal -c rust-src --target ${{ matrix.target }} && rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-test
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+
+      - name: Test
+        run: cargo test --profile small --target ${{ matrix.target }} -- --test-threads=1
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x64, ext: .exe }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: linux-x64, ext: "" }
+          - { os: macos-latest, target: aarch64-apple-darwin, name: macos-arm64, ext: "" }
+          - { os: macos-latest, target: x86_64-apple-darwin, name: macos-x64, ext: "" }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Real-time scanning of every file the compiler writes slows the Windows jobs: the folders of the build are left out of it.
+      - name: Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup"
+
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal -c rust-src --target ${{ matrix.target }} && rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-build
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+
+      - name: Build
+        run: >
+          cargo build --profile small --target ${{ matrix.target }}
+          -Z build-std=std,panic_abort -Z build-std-features=optimize_for_size
+
+      # The zip holds the executable and nothing else; the sha256 is the one of the executable, not of the zip.
+      - name: Package
+        run: |
+          out="HashManager-${{ matrix.name }}"
+          exe="HashManager${{ matrix.ext }}"
+          mkdir dist
+          cp "target/${{ matrix.target }}/small/$exe" "dist/$exe"
+          cd dist
+          if [ "${{ runner.os }}" = "macOS" ]; then shasum -a 256 "$exe" > "../$out.sha256.txt"; else sha256sum "$exe" > "../$out.sha256.txt"; fi
+          if [ "${{ runner.os }}" = "Windows" ]; then 7z a "../$out.zip" "$exe" >/dev/null; else zip -q "../$out.zip" "$exe"; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HashManager-${{ matrix.name }}
+          path: HashManager-${{ matrix.name }}.*
+
+  publish:
+    if: github.event_name == 'release'
+    needs: [clippy, test, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" dist/* --repo "$REPO" --clobber

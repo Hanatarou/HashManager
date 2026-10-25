@@ -1,0 +1,102 @@
+[package]
+name = "hashmanager"
+# The first three numbers of `consts::APP_VERSION` (Cargo accepts only three); `tests/all/round31.rs` checks they agree.
+version = "1.0.0"
+edition = "2021"
+description = "Hash Manager - calculate and verify file, folder, text and disk hashes on Windows, Linux and macOS."
+license = "MIT"
+default-run = "HashManager"
+# The tests are one program (tests/all/main.rs), not one program per file.
+autotests = false
+
+[lib]
+name = "hashcore"
+path = "src/lib.rs"
+
+[[bin]]
+name = "HashManager"
+path = "src/bin/gui.rs"
+
+[dependencies]
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
+blake3 = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+crc32fast = "1"
+ripemd = "0.1"
+whirlpool = "0.10"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+ed25519-dalek = "2"
+pgp = { version = "0.21", default-features = false }
+base64 = "0.22"
+zstd = "0.13"
+num_cpus = "1"
+eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland"] }
+egui_extras = { version = "0.36", default-features = false }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+unicode-bidi = { version = "0.3" }
+# Names are compared the way the file system of macOS does (composed or decomposed accents are the same name).
+unicode-normalization = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+# Unwinding on purpose: a hashing thread that panics ends its job with an error message (`job.crashed`) and the
+# window stays open. This is the profile of `cargo build --release`; the released program is built with `small`, which aborts.
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.60"
+features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_UI_Shell", "Win32_Security", "Win32_System_SystemInformation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_HiDpi"]
+
+[dev-dependencies]
+# Only for the test that checks every character of every language against the built-in fonts.
+ttf-parser = "0.25"
+# Only for the tests that read the DFXML the program writes with a real XML parser.
+roxmltree = "0.20"
+
+[build-dependencies]
+# Packs the fonts and the language files into the program compressed (build.rs); the program unpacks them with the same crate.
+zstd = "0.13"
+embed-manifest = "1.5"
+embed-resource = "3"
+
+# The released program, the smallest one: size-optimised, and it stops on a panic (after writing it to the log). The release
+# workflow builds it with a nightly Rust, which adds -Z build-std on top of this profile.
+[profile.small]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+
+# Size-optimising (`z`) makes some hash algorithms much slower (measured: SHA-224/256 about 2.9x, CRC32 and XXH3 about 1.8x,
+# SHA-3 up to 1.7x), so the crates that calculate them are compiled for speed; the rest of the program stays `z`.
+[profile.small.package.sha2]
+opt-level = 3
+[profile.small.package.sha3]
+opt-level = 3
+[profile.small.package.keccak]
+opt-level = 3
+[profile.small.package.crc32fast]
+opt-level = 3
+[profile.small.package.xxhash-rust]
+opt-level = 3
+
+# All the test files, linked once.
+[[test]]
+name = "all"
+path = "tests/all/main.rs"
+
+# Draws the window without opening one (every language, every tab), to look at the result as a picture:
+#   cargo run --release --example render_ui -- OUTPUT_DIR [LANG ...]
+[[example]]
+name = "render_ui"
+path = "examples/render_ui/main.rs"
